@@ -2,7 +2,7 @@
 
 iPhone-style StandBy for Android: analog clock on the left, calendar / weather on the right, battery ring, and notification banners.
 
-**Download:** [`Standby.apk`](Standby.apk) (debug build, Android 8.0+).
+**[⬇ Download Standby.apk](https://github.com/amansn7/android-standby/releases/latest/download/Standby.apk)** (Android 8.0+) — or see [Releases](https://github.com/amansn7/android-standby/releases).
 
 ## Setup on phone
 
