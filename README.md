@@ -7,11 +7,16 @@ iPhone-style StandBy for Android: analog clock on the left, calendar / weather o
 ## Setup on phone
 
 1. Install `Standby.apk` (allow "install unknown apps").
-2. Open it → allow location (for weather).
-3. Notification-access screen opens on first launch → enable **Standby**. Long-press the clock screen to reopen it later.
-4. Auto standby: Settings → Display → Screen saver → **Standby**, start "While charging".
+2. Open it once → allow **location** (weather) and **notifications**.
+3. If a "full-screen notifications" screen opens → allow **Standby** (Android 14+).
+4. Next launch, the notification-access screen opens → enable **Standby** (for banners). Long-press the clock screen to reopen it later.
+5. Recommended: Settings → Apps → Standby → Battery → **Unrestricted**, so the charger watcher isn't killed.
+
+**Plug in the charger → Standby opens over the lock screen** (even after a power-button lock). Unplug → it closes and the phone stays locked. A silent "Standby opens when you plug in" notification stays in the shade; that's the watcher.
 
 Tap or swipe the right panel to switch calendar ↔ weather. Back/power exits.
+
+Optional: Settings → Display → Screen saver → **Standby** also works on phones that have that menu.
 
 ## Build
 

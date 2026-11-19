@@ -4,9 +4,19 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.net.Uri
+import android.os.Build
+import android.os.IBinder
 import android.graphics.drawable.Drawable
 import android.location.Geocoder
 import android.location.Location
@@ -24,24 +34,47 @@ import java.net.URL
 import kotlin.math.roundToInt
 
 class StandbyActivity : Activity() {
+    // Like iPhone StandBy: leave when the charger is pulled.
+    private val unplugged = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) = finish()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(StandbyView(this, onLongPress = ::openNotificationAccess))
+        registerReceiver(unplugged, IntentFilter(Intent.ACTION_POWER_DISCONNECTED))
+        ChargeWatcher.start(this)
 
-        if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION), 1)
-
-        // Ask for notification access once; afterwards long-press the screen to change it.
-        val prefs = getPreferences(MODE_PRIVATE)
-        if (!notificationAccessGranted() && !prefs.getBoolean("asked", false)) {
-            prefs.edit().putBoolean("asked", true).apply()
-            openNotificationAccess()
-        }
+        val missing = listOfNotNull(Manifest.permission.ACCESS_COARSE_LOCATION,
+            if (Build.VERSION.SDK_INT >= 33) Manifest.permission.POST_NOTIFICATIONS else null)
+            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) nextSetupStep() else requestPermissions(missing.toTypedArray(), 1)
     }
+
+    override fun onResume() {
+        super.onResume()
+        getSystemService(NotificationManager::class.java).cancel(ChargeWatcher.TRIGGER_ID)
+    }
+
+    override fun onDestroy() { unregisterReceiver(unplugged); super.onDestroy() }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
         Weather.refresh(this, force = true)
+        nextSetupStep()
+    }
+
+    /** Opens at most one settings screen per launch, each only once; long-press reopens notification access. */
+    private fun nextSetupStep() {
+        val prefs = getPreferences(MODE_PRIVATE)
+        fun once(key: String, needed: Boolean, open: () -> Unit): Boolean {
+            if (!needed || prefs.getBoolean(key, false)) return false
+            prefs.edit().putBoolean(key, true).apply(); open(); return true
+        }
+        once("askedFullScreen", Build.VERSION.SDK_INT >= 34 &&
+            !getSystemService(NotificationManager::class.java).canUseFullScreenIntent()) {
+            startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName")))
+        } || once("asked", !notificationAccessGranted(), ::openNotificationAccess)
     }
 
     private fun notificationAccessGranted() =
@@ -56,6 +89,52 @@ class StandbyActivity : Activity() {
             or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
             or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
     }
+}
+
+/**
+ * Waits for the charger and pops Standby over the lock screen via a full-screen intent
+ * (same mechanism alarm apps use). Started from the app and on boot.
+ */
+class ChargeWatcher : Service() {
+    private val plugged = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) = showStandby()
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel(CH_SERVICE, "Waiting for charger", NotificationManager.IMPORTANCE_MIN))
+        nm.createNotificationChannel(NotificationChannel(CH_TRIGGER, "Open on charge", NotificationManager.IMPORTANCE_HIGH))
+        val n = Notification.Builder(this, CH_SERVICE).setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("Standby opens when you plug in").setContentIntent(openStandby()).build()
+        if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(1, n)
+        registerReceiver(plugged, IntentFilter(Intent.ACTION_POWER_CONNECTED))
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
+    override fun onDestroy() { unregisterReceiver(plugged); super.onDestroy() }
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    // Screen off/locked -> launches the activity directly; phone in use -> heads-up "tap to open".
+    private fun showStandby() = getSystemService(NotificationManager::class.java).notify(TRIGGER_ID,
+        Notification.Builder(this, CH_TRIGGER).setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("Standby").setContentText("Charging — tap to open Standby")
+            .setCategory(Notification.CATEGORY_ALARM).setAutoCancel(true).setTimeoutAfter(30_000)
+            .setContentIntent(openStandby()).setFullScreenIntent(openStandby(), true).build())
+
+    private fun openStandby() = PendingIntent.getActivity(this, 0,
+        Intent(this, StandbyActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE)
+
+    companion object {
+        const val TRIGGER_ID = 2
+        private const val CH_SERVICE = "watcher"; private const val CH_TRIGGER = "trigger"
+        fun start(c: Context) = c.startForegroundService(Intent(c, ChargeWatcher::class.java))
+    }
+}
+
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(c: Context, i: Intent) { ChargeWatcher.start(c) }
 }
 
 /** Android "screen saver" — starts automatically while charging/docked. Back/power exits. */
